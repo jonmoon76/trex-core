@@ -1696,10 +1696,12 @@ protected:
                  CGenNodeStateless * node_sl,
                  rte_mbuf_t *m,
                  CVirtualIFPerSideStats  * lp_stats);
-    int send_one_pkt_lat(CCorePerPort * lp_port,
+    int send_one_pkt_lat(uint8_t tx_queue,
+                 CCorePerPort * lp_port,
                  rte_mbuf_t *m,
                  CVirtualIFPerSideStats  * lp_stats);
-    int send_ieee_1588_pkt_lat(CCorePerPort * lp_port,
+    int send_ieee_1588_pkt_lat(uint8_t tx_queue,
+                 CCorePerPort * lp_port,
                  rte_mbuf_t *m,
                  CVirtualIFPerSideStats  * lp_stats);
 
@@ -2022,15 +2024,15 @@ port_ieee1588_tx_timestamp_check(uint16_t pi, struct timespec *timestamp)
 #endif
 }
 
-HOT_FUNC int CCoreEthIF::send_one_pkt_lat(CCorePerPort *lp_port, rte_mbuf_t *m, CVirtualIFPerSideStats *lp_stats) {
+HOT_FUNC int CCoreEthIF::send_one_pkt_lat(uint8_t tx_queue, CCorePerPort *lp_port, rte_mbuf_t *m, CVirtualIFPerSideStats *lp_stats) {
 
-    int ret = lp_port->m_port->tx_burst(lp_port->m_tx_queue_id_lat, &m, 1);
+    int ret = lp_port->m_port->tx_burst(tx_queue, &m, 1);
 
     if (likely( CGlobalInfo::m_options.m_is_queuefull_retry )) {
         while ( unlikely( ret != 1 ) ){
             rte_delay_us(1);
             lp_stats->m_tx_queue_full += 1;
-            ret = lp_port->m_port->tx_burst(lp_port->m_tx_queue_id_lat, &m, 1);
+            ret = lp_port->m_port->tx_burst(tx_queue, &m, 1);
         }
     } else {
         if ( unlikely( ret != 1 ) ) {
@@ -2042,7 +2044,7 @@ HOT_FUNC int CCoreEthIF::send_one_pkt_lat(CCorePerPort *lp_port, rte_mbuf_t *m, 
     return ret;
 }
 
-HOT_FUNC int CCoreEthIF::send_ieee_1588_pkt_lat(CCorePerPort *lp_port, rte_mbuf_t *m, CVirtualIFPerSideStats *lp_stats) {
+HOT_FUNC int CCoreEthIF::send_ieee_1588_pkt_lat(uint8_t tx_queue, CCorePerPort *lp_port, rte_mbuf_t *m, CVirtualIFPerSideStats *lp_stats) {
 
     struct timespec tstamp_tx;
     struct flow_stat_payload_header_ieee_1588 *fsp_head_ieee_1588 = NULL;
@@ -2056,7 +2058,7 @@ HOT_FUNC int CCoreEthIF::send_ieee_1588_pkt_lat(CCorePerPort *lp_port, rte_mbuf_
      * Hence update the reference count here.
      */
     rte_pktmbuf_refcnt_update(m,1);
-    int ret = send_one_pkt_lat( lp_port, m, lp_stats);
+    int ret = send_one_pkt_lat(tx_queue, lp_port, m, lp_stats);
 
     port_ieee1588_tx_timestamp_check(lp_port->m_port->get_tvpid(), &tstamp_tx);
     /* Just make sure we you have one mbuf */
@@ -2072,7 +2074,7 @@ HOT_FUNC int CCoreEthIF::send_ieee_1588_pkt_lat(CCorePerPort *lp_port, rte_mbuf_
 
         m->ol_flags &= ~RTE_MBUF_F_TX_IEEE1588_TMST; /* FUP packet doesnt need to be timestampped */
 
-        ret =  send_one_pkt_lat( lp_port, m, lp_stats);
+        ret =  send_one_pkt_lat(tx_queue, lp_port, m, lp_stats);
 
         return ret;
     }
@@ -2083,10 +2085,15 @@ HOT_FUNC int CCoreEthIF::send_pkt_lat(CCorePerPort *lp_port, CGenNodeStateless *
     // We allow sending only from first core of each port. This is serious internal bug otherwise.
     assert(lp_port->m_tx_queue_id_lat != INVALID_Q_ID);
 
+    // XXX pass pgid from here off node_sl->get_stat_pgid()
+    // get_dpdk_mode()->total_tx_queues(); gives queues (2 more than actual DP qs - latency and main/spare).
+
+    uint8_t tx_queue = node_sl->get_stat_pgid() % (get_dpdk_mode()->total_tx_queues());
+
     if ( node_sl->is_latency_ieee_1588_enabled()) {
-        return send_ieee_1588_pkt_lat( lp_port, m, lp_stats);
+        return send_ieee_1588_pkt_lat(tx_queue, lp_port, m, lp_stats);
     } else {
-        return send_one_pkt_lat(lp_port, m, lp_stats);
+        return send_one_pkt_lat(tx_queue, lp_port, m, lp_stats);
     }
 
 }
